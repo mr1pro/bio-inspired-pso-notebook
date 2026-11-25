@@ -62,3 +62,10 @@ jupyter notebook notebooks/MLP_PSO_Coursework.ipynb
 - [ ] Write up the report (best training loss, test accuracy/precision/
       recall/F1, PSO convergence behaviour, hyperparameter + informant
       strategy comparison — see notebook section 9).
+
+## IEEE-format report
+
+`MLP_PSO_IEEE_Report.pdf` (two-column IEEE conference format) is pre-built
+from `latex/report.tex` using the real results already in this repo. To
+recompile after editing: `tectonic latex/report.tex --outdir .` (requires
+`brew install tectonic`), run from the repo root so the image paths resolve.
