@@ -45,6 +45,13 @@ class MLPBuilder:
                 "Number of activation functions must match number of hidden layers: "
                 f"{len(hidden_layers)} hidden layers vs {len(activations)} activations."
             )
+        if any(not isinstance(n, int) or n <= 0 for n in hidden_layers):
+            raise ValueError(f"hidden_layers must be positive integers, got {hidden_layers}.")
+        unknown = [a for a in activations if a not in _ACTIVATION_MAP]
+        if unknown:
+            raise ValueError(
+                f"Unknown activation name(s) {unknown}; must be one of {sorted(_ACTIVATION_MAP)}."
+            )
         if config.get("task") not in ("binary_classification", "multiclass_classification"):
             raise ValueError(
                 "config['task'] must be 'binary_classification' or 'multiclass_classification' "
@@ -59,7 +66,12 @@ class MLPBuilder:
     def determine_output_size(self) -> int:
         if self.config["task"] == "binary_classification":
             return 1
-        return int(np.max(self.y)) + 1 if self.y.ndim == 1 else self.y.shape[1]
+        if self.y.ndim == 1:
+            # Use the count of distinct labels actually present, not max(y)+1,
+            # so a split that happens to miss the globally-largest class label
+            # doesn't silently undersize the output layer.
+            return len(np.unique(self.y))
+        return self.y.shape[1]
 
     def determine_output_activation(self) -> ActivationFunction:
         if self.config["task"] == "binary_classification":
