@@ -34,7 +34,9 @@ class MLPBuilder:
         network, loss = builder.build()
 
     "hidden_layers": [] is allowed and gives a network with no hidden layer.
-    An optional "loss" entry ("bce", "mse" or "cce") overrides the default.
+    Two optional entries override the defaults in the table above:
+        "output_activation"  any activation name, e.g. "tanh"
+        "loss"               "bce", "mse" or "cce"
     """
 
     def __init__(self, rng: Optional[np.random.Generator] = None):
@@ -67,6 +69,8 @@ class MLPBuilder:
             raise ValueError("softmax is only meant for the output layer.")
         if config.get("task") not in _TASKS:
             raise ValueError(f"config['task'] must be one of {_TASKS}.")
+        if config.get("output_activation") is not None:
+            make_activation(config["output_activation"])  # raises ValueError if unknown
 
         self.config = dict(config, hidden_layers=hidden_layers, activations=activations)
         return self
@@ -84,6 +88,8 @@ class MLPBuilder:
         return self.y.shape[1]
 
     def determine_output_activation(self) -> ActivationFunction:
+        if self.config.get("output_activation") is not None:
+            return make_activation(self.config["output_activation"])
         if self.config["task"] == "binary_classification":
             return make_activation("logistic")
         return make_activation("softmax")

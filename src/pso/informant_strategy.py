@@ -90,7 +90,8 @@ class NearestNeighbourInformantSelection(InformantSelectionStrategy):
 
 
 class RingInformantSelection(InformantSelectionStrategy):
-    """Fixed ring: the particle's neighbours by index, k/2 on each side.
+    """Fixed ring: the particle's nearest neighbours by index, taken
+    alternately from each side (+1, -1, +2, -2, ...) until there are k.
 
     This is the classic "lbest" topology. The neighbourhoods never change and
     overlap only slightly, so good positions spread around the ring slowly.
