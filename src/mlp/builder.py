@@ -1,106 +1,123 @@
-"""Builder pattern: constructs a Network + Loss from hyperparameters (section 2.7)."""
+"""Builder for the ANN: turns a short configuration into a ready network."""
 
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from src.mlp.activations import ActivationFunction, Sigmoid, Softmax, Tanh
+from src.mlp.activations import ActivationFunction, make_activation
 from src.mlp.layer import Layer
-from src.mlp.losses import BinaryCrossEntropy, CategoricalCrossEntropy, Loss
+from src.mlp.losses import Loss, make_loss
 from src.mlp.network import Network
 
-_ACTIVATION_MAP = {
-    "sigmoid": Sigmoid,
-    "tanh": Tanh,
-    "softmax": Softmax,
-}
+_TASKS = ("binary_classification", "multiclass_classification")
 
 
 class MLPBuilder:
-    """Builds a complete MLP from a dataset + a user-specified configuration.
+    """Builds a Network and a matching Loss from a dataset and a configuration.
 
-    Example config:
-        {
-            "hidden_layers": [8, 5],
-            "activations": ["tanh", "sigmoid"],
-            "task": "multiclass_classification",  # or "binary_classification"
-        }
+    The user chooses the hidden part of the network; the builder works out the
+    rest. The number of inputs comes from the data, and the output layer and
+    loss follow from the task:
+
+        binary classification      1 logistic output,  binary cross-entropy
+        multiclass classification  one softmax output per class, categorical
+                                   cross-entropy
+
+    Example:
+        builder = MLPBuilder()
+        builder.set_dataset(X_train, y_train)
+        builder.set_configuration({
+            "hidden_layers": [8, 4],            # two hidden layers
+            "activations": ["tanh", "relu"],    # one activation per hidden layer
+            "task": "binary_classification",
+        })
+        network, loss = builder.build()
+
+    "hidden_layers": [] is allowed and gives a network with no hidden layer.
+    An optional "loss" entry ("bce", "mse" or "cce") overrides the default.
     """
 
-    def __init__(self):
-        self.X = None
-        self.y = None
+    def __init__(self, rng: Optional[np.random.Generator] = None):
+        self.X: Optional[np.ndarray] = None
+        self.y: Optional[np.ndarray] = None
         self.config: Dict = {}
+        self.rng = rng
 
     def set_dataset(self, X: np.ndarray, y: np.ndarray) -> "MLPBuilder":
+        """Store the training data. Only its shape is used."""
         self.X = X
         self.y = y
         return self
 
     def set_configuration(self, config: Dict) -> "MLPBuilder":
-        hidden_layers = config.get("hidden_layers", [])
-        activations = config.get("activations", [])
+        """Store the architecture after checking that it is consistent."""
+        hidden_layers = list(config.get("hidden_layers", []))
+        activations = list(config.get("activations", []))
+
         if len(hidden_layers) != len(activations):
             raise ValueError(
-                "Number of activation functions must match number of hidden layers: "
-                f"{len(hidden_layers)} hidden layers vs {len(activations)} activations."
+                "One activation is needed per hidden layer: got "
+                f"{len(hidden_layers)} hidden layers and {len(activations)} activations."
             )
-        if any(not isinstance(n, int) or n <= 0 for n in hidden_layers):
+        if any(not isinstance(n, (int, np.integer)) or n <= 0 for n in hidden_layers):
             raise ValueError(f"hidden_layers must be positive integers, got {hidden_layers}.")
-        unknown = [a for a in activations if a not in _ACTIVATION_MAP]
-        if unknown:
-            raise ValueError(
-                f"Unknown activation name(s) {unknown}; must be one of {sorted(_ACTIVATION_MAP)}."
-            )
-        if config.get("task") not in ("binary_classification", "multiclass_classification"):
-            raise ValueError(
-                "config['task'] must be 'binary_classification' or 'multiclass_classification' "
-                "(must be stated explicitly, not inferred from the labels)."
-            )
-        self.config = config
+        for name in activations:
+            make_activation(name)  # raises ValueError for an unknown name
+        if "softmax" in activations:
+            raise ValueError("softmax is only meant for the output layer.")
+        if config.get("task") not in _TASKS:
+            raise ValueError(f"config['task'] must be one of {_TASKS}.")
+
+        self.config = dict(config, hidden_layers=hidden_layers, activations=activations)
         return self
 
     def determine_input_size(self) -> int:
+        """Number of input neurons = number of features in the data."""
         return self.X.shape[1]
 
     def determine_output_size(self) -> int:
+        """One output for a binary task, one per class otherwise."""
         if self.config["task"] == "binary_classification":
             return 1
         if self.y.ndim == 1:
-            # Use the count of distinct labels actually present, not max(y)+1,
-            # so a split that happens to miss the globally-largest class label
-            # doesn't silently undersize the output layer.
             return len(np.unique(self.y))
         return self.y.shape[1]
 
     def determine_output_activation(self) -> ActivationFunction:
         if self.config["task"] == "binary_classification":
-            return Sigmoid()
-        return Softmax()
+            return make_activation("logistic")
+        return make_activation("softmax")
 
     def determine_loss(self) -> Loss:
+        if "loss" in self.config:
+            return make_loss(self.config["loss"])
         if self.config["task"] == "binary_classification":
-            return BinaryCrossEntropy()
-        return CategoricalCrossEntropy()
+            return make_loss("bce")
+        return make_loss("cce")
 
     def build_layers(self, network: Network) -> None:
-        hidden_layers: List[int] = self.config.get("hidden_layers", [])
-        activations: List[str] = self.config.get("activations", [])
+        """Create the hidden layers, then the output layer, in order."""
+        hidden_layers: List[int] = self.config["hidden_layers"]
+        activations: List[str] = self.config["activations"]
 
-        input_size = self.determine_input_size()
-        prev_size = input_size
-
+        previous_size = self.determine_input_size()
         for size, activation_name in zip(hidden_layers, activations):
-            activation = _ACTIVATION_MAP[activation_name]()
-            network.add_layer(Layer(prev_size, size, activation))
-            prev_size = size
+            network.add_layer(
+                Layer(previous_size, int(size), make_activation(activation_name), self.rng)
+            )
+            previous_size = int(size)
 
-        output_size = self.determine_output_size()
-        output_activation = self.determine_output_activation()
-        network.add_layer(Layer(prev_size, output_size, output_activation))
+        network.add_layer(
+            Layer(
+                previous_size,
+                self.determine_output_size(),
+                self.determine_output_activation(),
+                self.rng,
+            )
+        )
 
-    def build(self):
-        """Coordinate construction; return (network, loss)."""
+    def build(self) -> Tuple[Network, Loss]:
+        """Return (network, loss)."""
         if self.X is None or self.y is None:
             raise ValueError("Call set_dataset(X, y) before build().")
         if not self.config:
@@ -108,5 +125,4 @@ class MLPBuilder:
 
         network = Network()
         self.build_layers(network)
-        loss = self.determine_loss()
-        return network, loss
+        return network, self.determine_loss()
